@@ -1,0 +1,19 @@
+# MarkItDown Web — one-command run with Docker Compose.
+#
+#   cp .env.example .env   # then fill in your secrets
+#   docker compose up -d   # build + run in the background
+#
+# The port is published on 127.0.0.1 only, matching the app's "localhost + a
+# Cloudflare Tunnel in front" model. To expose it directly on the LAN instead,
+# change the mapping to "5005:5005".
+
+services:
+  markitdown:
+    build: .
+    image: markitdown-web
+    container_name: markitdown
+    ports:
+      - "127.0.0.1:5005:5005"
+    env_file:
+      - .env
+    restart: unless-stopped
