@@ -4,6 +4,8 @@ Turn any file — PDF, Word, PowerPoint, Excel, HTML, images, audio, CSV, JSON,
 zip — into clean Markdown, from a browser or over an API. Scanned pages and
 images get OCR'd automatically.
 
+![MarkItDown Web — drag a file in, preview the Markdown, download it](docs/demo.gif)
+
 The point is tokens. Feeding a raw `.pdf` or `.docx` straight into an LLM is
 wasteful — the file is full of binary structure, styling, and layout noise the
 model has to pay for. Markdown is famously lean: the same content, stripped to
