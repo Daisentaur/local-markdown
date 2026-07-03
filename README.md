@@ -12,13 +12,6 @@ model has to pay for. Markdown is famously lean: the same content, stripped to
 text and structure, costs a fraction of the tokens. So before an agent (or you)
 reasons over a file, run it through here and hand the model the `.md` instead.
 
-```
-report.pdf   ──►  # Q3 Report
-(1.4 MB,          | Region | Revenue |
- ~9k tokens)      | ------ | ------- |
-                  | APAC   | $1.2M   |    ~600 tokens
-```
-
 This isn't a new conversion engine. It's a wrapper — I took a couple of solid
 open-source projects, stitched them into one small UI, and made the whole thing
 task-specific: point a human *or* an agent at it and get Markdown back. No
