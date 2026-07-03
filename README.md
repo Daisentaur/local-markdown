@@ -1,221 +1,258 @@
 # MarkItDown Web
 
-A self-hosted web interface around Microsoft's
-[markitdown](https://github.com/microsoft/markitdown) library. Drag in files
-(PDF, Word, PowerPoint, Excel, HTML, images, **audio (mp3/wav)**, CSV, JSON,
-zip, and more), convert them to Markdown, preview the result, and download
-individual `.md` files or all of them as a zip.
+Turn any file — PDF, Word, PowerPoint, Excel, HTML, images, audio, CSV, JSON,
+zip — into clean Markdown, from a browser or over an API. Scanned pages and
+images get OCR'd automatically.
 
-**Scanned PDFs and images are OCR'd automatically** so their text ends up in the
-Markdown too (markitdown alone only reads *embedded* text). See
-[OCR](#ocr-scanned-pdfs--images) below.
-
-Files are converted in memory on the machine running this app. Nothing is stored.
+The point is tokens. Feeding a raw `.pdf` or `.docx` straight into an LLM is
+wasteful — the file is full of binary structure, styling, and layout noise the
+model has to pay for. Markdown is famously lean: the same content, stripped to
+text and structure, costs a fraction of the tokens. So before an agent (or you)
+reasons over a file, run it through here and hand the model the `.md` instead.
 
 ```
-local-markdown/
-├── app.py            # Flask backend (upload, convert, zip, optional login)
-├── index.html        # UI: drag/drop, live preview, downloads
-├── login.html        # Sign-in page (only used when login is enabled)
-├── static/
-│   └── marked.min.js # Markdown preview renderer (bundled, works offline)
-├── requirements.txt
-├── run.sh            # Local launcher — no login
-├── run-public.sh     # Public launcher — reads .env, enables admin login
-├── deploy/
-│   └── markitdown.service  # systemd unit for 24/7 hosting
-├── DEPLOY.md         # Full homelab + Cloudflare Tunnel walkthrough
-├── .env.example      # Copy to .env for the public launcher
-└── .gitignore
+report.pdf   ──►  # Q3 Report
+(1.4 MB,          | Region | Revenue |
+ ~9k tokens)      | ------ | ------- |
+                  | APAC   | $1.2M   |    ~600 tokens
 ```
 
-Running it 24/7 on a server? See **[DEPLOY.md](DEPLOY.md)** for the full
-homelab + Cloudflare Tunnel setup.
+This isn't a new conversion engine. It's a wrapper — I took a couple of solid
+open-source projects, stitched them into one small UI, and made the whole thing
+task-specific: point a human *or* an agent at it and get Markdown back. No
+reinventing the wheel; just gluing good wheels together and putting a steering
+column on them.
+
+Files are converted **in memory** and never written to disk. Nothing is stored.
 
 ---
 
-## 1. Run it locally (no login)
+## Just want to use it?
 
-Requires **Python 3.10+**.
+Pick one of these. All three end with the app on `http://127.0.0.1:5005`.
+
+### Option A — Docker (nothing to install but Docker)
+
+OCR tools come baked into the image.
 
 ```bash
-cd ~/dev/local-markdown
+git clone https://github.com/Daisentaur/local-markdown.git
+cd local-markdown
+cp .env.example .env          # then edit .env (username, password, API key)
+docker compose up -d
+```
+
+### Option B — one-command native install (Linux)
+
+Builds a virtualenv, installs the OCR tools, generates `.env` with fresh
+secrets, and optionally installs a systemd service for 24/7 running.
+
+```bash
+git clone https://github.com/Daisentaur/local-markdown.git
+cd local-markdown
+./setup.sh
+```
+
+### Option C — just run it locally, no login
+
+For quick throwaway local use (no auth at all):
+
+```bash
 ./run.sh
 ```
 
-First launch builds a virtualenv and installs dependencies (needs internet
-once). Then open **http://127.0.0.1:5005**, drop in files, hit **Convert**, and
-download the Markdown. `Ctrl+C` stops it.
+First launch builds the venv and installs deps (needs internet once).
 
-**Audio just works** — a static `ffmpeg` is installed via pip (`imageio-ffmpeg`),
-so `.mp3` and `.wav` convert with no separate install. If you already have a
-system `ffmpeg`, it's used instead. (Note: speech *transcription* inside
-markitdown uses an online recognizer, so that specific step needs internet;
-audio metadata and format handling work regardless.)
+> **Want OCR on native installs?** `sudo apt install ocrmypdf tesseract-ocr`.
+> Docker already includes them. Without them, everything else still works —
+> OCR just no-ops.
+
+### Then — use it
+
+**In a browser:** open `http://127.0.0.1:5005`, log in (if you set a
+username/password), drag files in, hit **Convert**, preview, and download the
+`.md` — one file or all of them as a zip.
+
+**From an agent or script:** the browser uses a session cookie a script can't
+carry, so set an `API_KEY` in `.env` and send it as a header. No login needed:
+
+```bash
+curl -H "X-API-Key: $API_KEY" \
+     -F "files=@report.pdf" \
+     http://127.0.0.1:5005/api/convert
+```
+
+You get back:
+
+```json
+{"results": [
+  {"name": "report.md", "source": "report.pdf",
+   "markdown": "# Q3 Report\n\n| Region | Revenue |\n...",
+   "ocr": false, "error": null}
+]}
+```
+
+The Markdown is in `results[].markdown`. `ocr` is `true` when the text was
+recovered from a scan/image. Point any of your projects' agents at this one
+endpoint and they all get token-optimized Markdown before doing their real work
+— including when they're handing files to *each other*.
+
+To reach it from other machines (and get HTTPS on your own subdomain) put a
+Cloudflare Tunnel in front — see **[DEPLOY.md](DEPLOY.md)**.
 
 ---
 
-## 2. Publish it to your domain: `markdown.example.com`
+## How it works (under the hood)
 
-Your app runs on your own machine, which has no fixed public IP — so you can't
-just point a DNS record at it. The clean fix is a **Cloudflare Tunnel**: a small
-program (`cloudflared`) on your machine makes an outbound connection to
-Cloudflare, and Cloudflare serves your subdomain and forwards traffic down that
-tunnel. No port forwarding, no public IP, and you get HTTPS automatically.
+The whole thing is a thin Flask app around three existing tools:
 
-> A "subdomain" is just a DNS record like `markdown` under `example.com`.
-> The tunnel setup below **creates that record for you** — you don't add it by
-> hand.
+- **[markitdown](https://github.com/microsoft/markitdown)** (Microsoft) does the
+  actual file → Markdown conversion for ~all the formats. It reads *embedded*
+  text, so a normal PDF/docx/xlsx converts directly.
+- **[OCRmyPDF](https://github.com/ocrmypdf/OCRmyPDF)** handles scanned /
+  image-only PDFs — markitdown can't read those (there's no embedded text), so
+  OCRmyPDF adds a real text layer first, then markitdown reads it as usual.
+- **[Tesseract](https://github.com/tesseract-ocr/tesseract)** does OCR on
+  standalone image files (`.png`, `.jpg`, `.tiff`, …).
 
-### Step A — Start the app WITH the admin login
+A request flows like this:
 
-```bash
-cd ~/dev/local-markdown
-cp .env.example .env
+1. A file comes in via `POST /api/convert` (browser fetch or an agent's header).
+2. `convert_one()` looks at the extension:
+   - **image** → straight to Tesseract, return the recognized text.
+   - **anything else** → markitdown converts it. If it's a PDF that came back
+     with essentially no text (a scan), OCRmyPDF adds a text layer and
+     markitdown re-reads it.
+   - **normal text files** skip OCR entirely — no slowdown.
+3. Each result is returned as `{name, source, markdown, ocr, error}`. One bad
+   file comes back with an `error` string instead of failing the whole batch.
+
+The OCR glue lives in [`ocr.py`](ocr.py) and shells out to the two CLIs, so it
+doesn't even touch the Python virtualenv — if the binaries aren't installed, it
+quietly no-ops.
+
+**Auth** has two doors. Browsers use a normal session login
+(`ADMIN_USERNAME` / `ADMIN_PASSWORD`, cookie signed by `SECRET_KEY`). Agents use
+an `API_KEY` sent as `X-API-Key:` (or `Authorization: Bearer`). Set the login
+vars and login turns on; leave them unset and the app runs open (fine for
+localhost).
+
+### Project layout
+
 ```
-
-Edit `.env` and set your own username, a strong password, and a random
-`SECRET_KEY` (the file shows the command to generate one). Then:
-
-```bash
-./run-public.sh
+local-markdown/
+├── app.py              # Flask backend: upload, convert, zip, auth
+├── ocr.py              # OCR layer (ocrmypdf + tesseract), CLI-based
+├── index.html          # UI: drag/drop, live preview, downloads
+├── login.html          # Sign-in page (only when login is enabled)
+├── static/marked.min.js# Markdown preview renderer (bundled, offline)
+├── Dockerfile          # container image with OCR baked in
+├── docker-compose.yml  # one-command Docker run
+├── setup.sh            # one-command native installer
+├── run.sh              # local launcher, no login
+├── run-public.sh       # reads .env, enables the admin login
+├── deploy/markitdown.service  # systemd unit for 24/7 hosting
+├── DEPLOY.md           # homelab + Cloudflare Tunnel walkthrough
+└── .env.example        # copy to .env for secrets
 ```
-
-Leave it running. It listens on `127.0.0.1:5005` and now requires your login.
-
-### Step B — Create the tunnel in the Cloudflare dashboard
-
-Do this in the browser (the dashboard you have open):
-
-1. Go to **one.dash.cloudflare.com** (Cloudflare Zero Trust). It's part of your
-   same account — pick a team name if it's your first time (free).
-2. Left sidebar → **Networks → Tunnels** → **Create a tunnel**.
-3. Choose **Cloudflared** as the connector → **Next**. Name it something like
-   `markdown` → **Save tunnel**.
-4. Cloudflare shows an **install command with a long token**. Pick your OS,
-   copy that command, and run it in a terminal on this machine. It installs and
-   starts `cloudflared` and connects it to this tunnel. Leave it running.
-   (On macOS this is typically `brew install cloudflared` followed by the
-   `cloudflared service install <TOKEN>` line they give you.)
-5. Back in the dashboard, once the connector shows **Connected**, click **Next**.
-
-### Step C — Route your subdomain to the local app
-
-On the tunnel's **Public Hostname** (or **Routes → Add route → Published
-application**) page:
-
-- **Subdomain:** `markdown`
-- **Domain:** `example.com`  (select from the dropdown)
-- **Path:** leave blank
-- **Type:** `HTTP`
-- **URL:** `localhost:5005`
-
-Save. Cloudflare **automatically creates the DNS record** for
-`markdown.example.com` pointing at the tunnel.
-
-### Step D — Done
-
-Open **https://markdown.example.com**. You'll get your sign-in page; log in
-with the credentials from `.env`, and the converter is live with HTTPS.
-
-**Keep in mind:** the site is only up while **both** `run-public.sh` (the app)
-and `cloudflared` (the tunnel) are running on your machine. Close your laptop /
-stop either one and the subdomain goes offline until you start them again. If
-you want it up 24/7, run it on an always-on machine or a small VPS instead.
-
-### Optional extra lock: Cloudflare Access
-
-Even with the app's own login, you can add a second gate in Zero Trust →
-**Access → Applications** that only lets *your* email reach the site at all
-(email one-time-pin or Google login). Nice belt-and-suspenders if it's public.
 
 ---
 
 ## OCR (scanned PDFs & images)
 
-markitdown extracts *embedded* text, so a scanned PDF or a photo of a document
-comes back empty. This app adds an OCR layer using two mature open-source tools:
+markitdown only reads *embedded* text, so a scanned PDF or a photo of a document
+comes back empty. The OCR layer fixes that — and only kicks in when it's needed,
+so regular files pay no penalty. Converted results carry `"ocr": true` when text
+was recovered this way, and the UI shows a small banner.
 
-- **[OCRmyPDF](https://github.com/ocrmypdf/OCRmyPDF)** — for image-only / scanned
-  PDF pages (auto-deskew, rotate, language detection), on top of Tesseract.
-- **[Tesseract](https://github.com/tesseract-ocr/tesseract)** — for standalone
-  image files (`.png`, `.jpg`, `.tiff`, `.webp`, …).
-
-Install the system tools once (they're not Python packages):
+Install the tools once (they're system packages, not pip):
 
 ```bash
 sudo apt install ocrmypdf tesseract-ocr          # Debian/Ubuntu/Mint
 # extra languages, e.g. French:  sudo apt install tesseract-ocr-fra
 ```
 
-OCR then turns on automatically. It only kicks in when it's needed — a normal
-text PDF or `.docx` skips OCR entirely, so there's **no speed penalty** on
-regular files. Converted results carry an `"ocr": true` flag when text was
-recovered this way.
-
-> **Handwriting is not reliably supported.** Tesseract targets printed/typed
-> text. Handwriting recognition needs a vision model (GPU or a paid API) and is
-> intentionally out of scope for this CPU-friendly layer — printed/scanned
-> documents are the supported case.
-
-**OCR config knobs** (in `.env`):
-
-| Variable | Meaning | Default |
-|---|---|---|
-| `OCR_ENABLED` | Master switch (`0` disables OCR) | `1` |
-| `OCR_LANGUAGE` | Tesseract language(s), e.g. `eng`, `eng+fra` | `eng` |
-| `OCR_PDF_TEXT_THRESHOLD` | Below this many chars, a PDF is treated as scanned | `16` |
-| `OCR_TIMEOUT` | Per-file OCR time cap (seconds) | `240` |
-
-If the system tools aren't installed, OCR silently no-ops and everything else
-works as before.
+> ⚠️ **Handwriting is not reliably supported.** Tesseract targets printed/typed
+> text. Reading handwriting well needs a vision model (a GPU or a paid API),
+> which is deliberately out of scope for this CPU-friendly layer. Printed and
+> scanned documents are the supported case; handwriting is on the roadmap.
 
 ---
 
-## Reference
+## Configuration
 
-**Endpoints**
-
-- `POST /api/convert` — accepts one or more files, converts each in memory,
-  returns `{results: [{name, source, markdown, ocr, error}]}`. `ocr` is `true`
-  when the text was recovered via OCR (scanned PDF / image). A file that can't
-  be parsed comes back with an `error` string instead of failing the whole batch.
-- `POST /api/zip` — bundles the converted `{name, markdown}` entries into
-  `markdown.zip` (duplicate names de-collided as `name_1.md`).
-- `GET /login`, `POST /login`, `GET /logout` — only active when login is enabled.
-
-**Agent / script access (API key).** The browser login uses a session cookie,
-which a script or AI agent can't carry. Set `API_KEY` in `.env` and have the
-agent send it as a header — no login needed:
-
-```bash
-curl -H "X-API-Key: $API_KEY" \
-     -F "files=@report.pdf" \
-     https://markdown.example.com/api/convert
-```
-
-`Authorization: Bearer <key>` works too. The `.md` text comes back in
-`results[].markdown`. Point any of your projects' agents at this endpoint to get
-token-optimized Markdown before they do their real work.
-
-**Login on/off.** Login is enabled automatically when both `ADMIN_USERNAME` and
-`ADMIN_PASSWORD` are set (that's what `run-public.sh` does via `.env`). With
-them unset (plain `./run.sh`), the app runs open — right for local use.
-
-**Config knobs**
+All via environment variables (or `.env`):
 
 | Variable | Meaning | Default |
 |---|---|---|
 | `HOST` | Bind address | `127.0.0.1` |
 | `PORT` | Port | `5005` |
-| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Enable + set the login | unset (login off) |
-| `API_KEY` | Lets agents/scripts call `/api/` via `X-API-Key` header | unset (API-key path off) |
-| `SECRET_KEY` | Signs login cookies (set a fixed random value in production) | random per start |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Set both to enable the browser login | unset (login off) |
+| `API_KEY` | Lets agents/scripts call `/api/` via `X-API-Key` | unset (API path off) |
+| `SECRET_KEY` | Signs login cookies — set a fixed random value in production | random per start |
+| `OCR_ENABLED` | Master switch for OCR (`0` disables) | `1` |
+| `OCR_LANGUAGE` | Tesseract language(s), e.g. `eng`, `eng+fra` | `eng` |
+| `OCR_PDF_TEXT_THRESHOLD` | Below this many chars, a PDF is treated as scanned | `16` |
+| `OCR_TIMEOUT` | Per-file OCR time cap (seconds) | `240` |
+
+Generate strong secrets:
+
+```bash
+python3 -c "import secrets; print(secrets.token_hex(32))"                 # SECRET_KEY
+python3 -c "import secrets; print('mid_'+secrets.token_urlsafe(32))"      # API_KEY
+```
 
 Upload size is capped at 100 MB/request (`MAX_CONTENT_LENGTH` in `app.py`).
+
+**Endpoints**
+
+- `POST /api/convert` — one or more files → `{results: [{name, source, markdown, ocr, error}]}`.
+- `POST /api/zip` — bundles `{name, markdown}` entries into `markdown.zip` (duplicate names de-collided).
+- `GET /login`, `POST /login`, `GET /logout` — only active when login is enabled.
+
+---
+
+## Running it 24/7 on your own domain
+
+The app listens on localhost only. To reach it from anywhere with HTTPS and no
+port-forwarding, a **Cloudflare Tunnel** connects your subdomain to the local
+app. Full walkthrough — gunicorn + systemd + the tunnel — is in
+**[DEPLOY.md](DEPLOY.md)**. `setup.sh` can install the systemd service for you.
+
+---
+
+## Limitations & caveats
+
+- **Handwriting** isn't reliably recognized (see OCR note above).
+- **Audio transcription** uses markitdown's online recognizer, so that specific
+  step needs internet; audio metadata/format handling works offline. A static
+  `ffmpeg` ships via `imageio-ffmpeg`, so `.mp3`/`.wav` work with no separate
+  install.
+- OCR trades speed for text — a big scanned PDF takes a few seconds per page on
+  CPU. Normal text files are unaffected.
+- It converts; it doesn't summarize. Getting *fewer, cleaner* tokens is the job;
+  what the LLM does with them is yours.
+
+## Roadmap
+
+- **Handwriting / vision OCR** — an optional path that routes hard cases to a
+  vision model (local on a GPU, or an API), off by default.
+- Broader language packs surfaced in the UI.
+
+## Security notes
+
+- Secrets live in `.env`, which is gitignored and should be `chmod 600`.
+- The app binds to localhost; only the Cloudflare Tunnel (or your own proxy)
+  should expose it. For a second gate, Cloudflare Access can restrict the site
+  to your email — see the note in [DEPLOY.md](DEPLOY.md).
+- API keys and passwords are compared in constant time.
 
 ---
 
 Built on [microsoft/markitdown](https://github.com/microsoft/markitdown) ·
-preview via [marked](https://github.com/markedjs/marked) · bundled ffmpeg via
+OCR by [OCRmyPDF](https://github.com/ocrmypdf/OCRmyPDF) and
+[Tesseract](https://github.com/tesseract-ocr/tesseract) · preview via
+[marked](https://github.com/markedjs/marked) · bundled ffmpeg via
 [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg).
+
+MIT licensed — see [LICENSE](LICENSE).
