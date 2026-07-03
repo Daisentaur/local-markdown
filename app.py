@@ -48,6 +48,8 @@ except Exception:
 
 from markitdown import MarkItDown
 
+import ocr
+
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100 MB per request
 app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
@@ -91,10 +93,40 @@ def login_required(f):
     return wrapper
 
 
-def convert_one(filename: str, data: bytes) -> str:
+def _markitdown_text(filename: str, data: bytes) -> str:
     stream = io.BytesIO(data)
     result = _md.convert_stream(stream, file_extension=os.path.splitext(filename)[1])
     return result.text_content
+
+
+def convert_one(filename: str, data: bytes):
+    """Convert a file to Markdown, transparently OCR'ing scanned input.
+
+    Returns (markdown_text, ocr_applied). For a normal text document OCR is
+    skipped entirely, so there's no speed penalty. Images are recognised with
+    Tesseract; image-only/scanned PDFs get an OCR text layer via ocrmypdf and
+    are then re-parsed by markitdown.
+    """
+    ext = os.path.splitext(filename)[1].lower()
+
+    # Images: markitdown only returns metadata, so prefer recognised text.
+    if ocr.OCR_ENABLED and ocr.is_image_ext(ext):
+        text = ocr.ocr_image(data)
+        if text:
+            return text, True
+        return _markitdown_text(filename, data), False  # fall back to metadata
+
+    md_text = _markitdown_text(filename, data)
+
+    # Scanned/image-only PDF: no embedded text -> add an OCR layer and re-parse.
+    if ext == ".pdf" and ocr.pdf_needs_ocr(md_text):
+        ocred = ocr.ocr_pdf(data)
+        if ocred is not data:
+            recovered = _markitdown_text(filename, ocred)
+            if len(recovered.strip()) > len(md_text.strip()):
+                return recovered, True
+
+    return md_text, False
 
 
 # --- Routes ----------------------------------------------------------------
@@ -140,13 +172,14 @@ def api_convert():
         name = secure_filename(f.filename) or "file"
         try:
             data = f.read()
-            md_text = convert_one(f.filename, data)
+            md_text, ocr_applied = convert_one(f.filename, data)
             results.append({"name": os.path.splitext(name)[0] + ".md",
-                            "source": f.filename, "markdown": md_text, "error": None})
+                            "source": f.filename, "markdown": md_text,
+                            "ocr": ocr_applied, "error": None})
         except Exception as e:  # noqa: BLE001
             results.append({"name": os.path.splitext(name)[0] + ".md",
                             "source": f.filename, "markdown": "",
-                            "error": f"{type(e).__name__}: {e}"})
+                            "ocr": False, "error": f"{type(e).__name__}: {e}"})
             app.logger.error("Conversion failed for %s\n%s", f.filename, traceback.format_exc())
 
     return jsonify({"results": results})

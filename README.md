@@ -6,6 +6,10 @@ A self-hosted web interface around Microsoft's
 zip, and more), convert them to Markdown, preview the result, and download
 individual `.md` files or all of them as a zip.
 
+**Scanned PDFs and images are OCR'd automatically** so their text ends up in the
+Markdown too (markitdown alone only reads *embedded* text). See
+[OCR](#ocr-scanned-pdfs--images) below.
+
 Files are converted in memory on the machine running this app. Nothing is stored.
 
 ```
@@ -127,13 +131,55 @@ Even with the app's own login, you can add a second gate in Zero Trust →
 
 ---
 
+## OCR (scanned PDFs & images)
+
+markitdown extracts *embedded* text, so a scanned PDF or a photo of a document
+comes back empty. This app adds an OCR layer using two mature open-source tools:
+
+- **[OCRmyPDF](https://github.com/ocrmypdf/OCRmyPDF)** — for image-only / scanned
+  PDF pages (auto-deskew, rotate, language detection), on top of Tesseract.
+- **[Tesseract](https://github.com/tesseract-ocr/tesseract)** — for standalone
+  image files (`.png`, `.jpg`, `.tiff`, `.webp`, …).
+
+Install the system tools once (they're not Python packages):
+
+```bash
+sudo apt install ocrmypdf tesseract-ocr          # Debian/Ubuntu/Mint
+# extra languages, e.g. French:  sudo apt install tesseract-ocr-fra
+```
+
+OCR then turns on automatically. It only kicks in when it's needed — a normal
+text PDF or `.docx` skips OCR entirely, so there's **no speed penalty** on
+regular files. Converted results carry an `"ocr": true` flag when text was
+recovered this way.
+
+> **Handwriting is not reliably supported.** Tesseract targets printed/typed
+> text. Handwriting recognition needs a vision model (GPU or a paid API) and is
+> intentionally out of scope for this CPU-friendly layer — printed/scanned
+> documents are the supported case.
+
+**OCR config knobs** (in `.env`):
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `OCR_ENABLED` | Master switch (`0` disables OCR) | `1` |
+| `OCR_LANGUAGE` | Tesseract language(s), e.g. `eng`, `eng+fra` | `eng` |
+| `OCR_PDF_TEXT_THRESHOLD` | Below this many chars, a PDF is treated as scanned | `16` |
+| `OCR_TIMEOUT` | Per-file OCR time cap (seconds) | `240` |
+
+If the system tools aren't installed, OCR silently no-ops and everything else
+works as before.
+
+---
+
 ## Reference
 
 **Endpoints**
 
 - `POST /api/convert` — accepts one or more files, converts each in memory,
-  returns `{results: [{name, source, markdown, error}]}`. A file that can't be
-  parsed comes back with an `error` string instead of failing the whole batch.
+  returns `{results: [{name, source, markdown, ocr, error}]}`. `ocr` is `true`
+  when the text was recovered via OCR (scanned PDF / image). A file that can't
+  be parsed comes back with an `error` string instead of failing the whole batch.
 - `POST /api/zip` — bundles the converted `{name, markdown}` entries into
   `markdown.zip` (duplicate names de-collided as `name_1.md`).
 - `GET /login`, `POST /login`, `GET /logout` — only active when login is enabled.

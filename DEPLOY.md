@@ -20,6 +20,9 @@ cd local-markdown
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip
 .venv/bin/pip install -r requirements.txt
+
+# OCR for scanned PDFs & images (system tools, not pip packages)
+sudo apt install -y ocrmypdf tesseract-ocr
 ```
 
 ## 2. Create your secrets file

@@ -74,6 +74,10 @@
   .preview code { background: var(--panel2); padding: 2px 5px; border-radius: 4px; }
   .preview pre { background: var(--panel2); padding: 12px; border-radius: 8px; overflow: auto; }
   .preview img { max-width: 100%; }
+  .ocrnote { margin: 0 16px 4px; padding: 8px 12px; font-size: 11.5px; line-height: 1.5; color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+  .ocrnote strong { color: var(--text); }
+  .ocrbanner { margin: 16px 24px 0; padding: 8px 12px; font-size: 12px; color: var(--accent); border: 1px solid var(--accent2); border-radius: 8px; background: var(--panel); }
+  .badge { font-size: 10px; padding: 1px 5px; border-radius: 4px; background: var(--panel2); color: var(--accent); border: 1px solid var(--border); }
   .empty { color: var(--muted); padding: 40px; text-align: center; }
   .errbox { margin: 20px; padding: 14px; border: 1px solid var(--err); border-radius: 8px; color: var(--err); font-size: 13px; }
   .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--muted); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
@@ -92,6 +96,10 @@
     <div class="drop" id="drop">
       <div>Drop files here or <strong>browse</strong></div>
       <div style="font-size:12px;margin-top:6px">PDF · Word · PowerPoint · Excel · HTML · images · audio · CSV · JSON · zip</div>
+    </div>
+    <div class="ocrnote">
+      🔍 Scanned PDFs &amp; images are auto-OCR'd for printed/typed text.
+      <strong>Handwriting isn't reliably recognised yet.</strong>
     </div>
     <input type="file" id="fileInput" multiple hidden />
     <div class="filelist" id="filelist"></div>
@@ -170,7 +178,7 @@ $("convertBtn").onclick = async () => {
     let ri = 0;
     for (const f of pending) {
       const r = data.results[ri++];
-      f.markdown = r.markdown; f.error = r.error; f.outName = r.name;
+      f.markdown = r.markdown; f.error = r.error; f.outName = r.name; f.ocr = r.ocr;
       f.status = r.error ? "err" : "ok";
     }
     if (state.active === -1 && state.files.length) state.active = 0;
@@ -191,13 +199,19 @@ function renderView() {
   if (!f) { view.innerHTML = '<div class="empty">Add files and hit Convert to see the Markdown here.</div>'; return; }
   if (f.status === "pending") { view.innerHTML = '<div class="empty">Not converted yet — hit Convert.</div>'; return; }
   if (f.status === "err") { view.innerHTML = ""; const b=document.createElement("div"); b.className="errbox"; b.textContent="Could not convert this file. "+f.error; view.appendChild(b); return; }
+  view.innerHTML = "";
+  if (f.ocr) {
+    const banner = document.createElement("div"); banner.className = "ocrbanner";
+    banner.textContent = "🔍 Text recovered via OCR. Printed/typed text is accurate; handwriting may be wrong or missing.";
+    view.appendChild(banner);
+  }
   if (state.mode === "raw") {
     const pre = document.createElement("pre"); pre.className = "raw"; pre.textContent = f.markdown;
-    view.innerHTML = ""; view.appendChild(pre);
+    view.appendChild(pre);
   } else {
     const div = document.createElement("div"); div.className = "preview";
     div.innerHTML = window.marked ? marked.parse(f.markdown) : f.markdown;
-    view.innerHTML = ""; view.appendChild(div);
+    view.appendChild(div);
   }
 }
 
