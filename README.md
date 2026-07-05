@@ -14,9 +14,8 @@ reasons over a file, run it through here and hand the model the `.md` instead.
 
 This isn't a new conversion engine. It's a wrapper — I took a couple of solid
 open-source projects, stitched them into one small UI, and made the whole thing
-task-specific: point a human *or* an agent at it and get Markdown back. No
-reinventing the wheel; just gluing good wheels together and putting a steering
-column on them.
+task-specific: point a human *or* an agent at it and get Markdown back. Nothing
+new; just taping good stuff together.
 
 Files are converted **in memory** and never written to disk. Nothing is stored.
 
@@ -97,7 +96,7 @@ Cloudflare Tunnel in front — see **[DEPLOY.md](DEPLOY.md)**.
 
 ---
 
-## How it works (under the hood)
+## How it works
 
 The whole thing is a thin Flask app around three existing tools:
 
@@ -230,8 +229,7 @@ app. Full walkthrough — gunicorn + systemd + the tunnel — is in
 
 ## Roadmap
 
-- **Handwriting / vision OCR** — an optional path that routes hard cases to a
-  vision model (local on a GPU, or an API), off by default.
+- Looking into more connectivity possibilities maybe.
 - Broader language packs surfaced in the UI.
 
 ## Security notes
