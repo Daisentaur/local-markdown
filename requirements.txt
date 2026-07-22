@@ -1,4 +1,5 @@
 flask>=3.0
 markitdown[all]>=0.1.0
+pdfminer.six>=20231228
 imageio-ffmpeg>=0.5.1
 gunicorn>=21.2
