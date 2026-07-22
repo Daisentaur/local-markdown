@@ -94,8 +94,17 @@ def login_required(f):
 
 
 def _markitdown_text(filename: str, data: bytes) -> str:
+    ext = os.path.splitext(filename)[1].lower()
+    # ponytail: markitdown 0.1.6 force-converts column-aligned PDF prose into
+    # mangled Markdown tables with no opt-out. We want plain prose, so extract
+    # PDFs with pdfminer directly (the same extractor markitdown uses for its
+    # own text path). This is the shared chokepoint, so it also covers the
+    # re-parse of an OCR'd scanned PDF. Want real table extraction? Delete this.
+    if ext == ".pdf":
+        from pdfminer.high_level import extract_text
+        return extract_text(io.BytesIO(data))
     stream = io.BytesIO(data)
-    result = _md.convert_stream(stream, file_extension=os.path.splitext(filename)[1])
+    result = _md.convert_stream(stream, file_extension=ext)
     return result.text_content
 
 
